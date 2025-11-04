@@ -1,0 +1,267 @@
+// Prisma schema for Discord Admin Verification System with ZKPassport
+// This schema extends the existing Discord bot OAuth foundation with zero-knowledge verification capabilities
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL")
+  directUrl = env("POSTGRES_URL_NON_POOLING")
+}
+
+// Existing Discord OAuth user model - maintains compatibility with existing bot functionality
+model User {
+  id           String @id @default(uuid())
+  userId       String @unique
+  accessToken  String @unique
+  refreshToken String @unique
+
+  @@map("users")
+}
+
+// ============================================================================
+// ZKPassport Admin Verification System Models
+// ============================================================================
+
+// Core model storing verified admin users with their ZKPassport anonymous identifiers
+// SECURITY: Only stores anonymous identifiers, never personal information
+model AdminVerification {
+  id                   String   @id @default(cuid())
+  discordUserId        String   @unique // Discord user ID for lookup and management
+  passportFingerprint  String   @unique // ZKPassport fingerprint for verification matching
+  uniqueIdentifier     String   @unique // ZKPassport anonymous identifier only - no personal data
+  lastVerified         DateTime @updatedAt // Automatically updated on verification changes
+  createdAt            DateTime @default(now())
+  isActive             Boolean  @default(true) // Allows for admin deactivation without deletion
+  expiryDate           DateTime? // Optional expiry for periodic re-verification requirements
+
+  // Relationships
+  history          VerificationHistory[]
+
+  // Performance indexes
+  @@index([discordUserId])
+  @@index([uniqueIdentifier])
+  @@index([isActive, expiryDate])
+  @@map("admin_verifications")
+}
+
+// Temporary sessions for ZKPassport verification process
+// Provides secure token-based verification flow with automatic cleanup
+model VerificationSession {
+  id            String   @id // Support both custom and auto-generated IDs
+  token         String   @unique // Secure random token for verification process
+  discordUserId String   // Links to Discord user initiating verification
+  expiresAt     DateTime // Automatic expiry for security
+  used          Boolean  @default(false) // Prevents token reuse
+  createdAt     DateTime @default(now())
+  
+  // Enhanced security fields for replay attack prevention
+  bindingHash   String?   // Hash of session binding context for validation
+  usageCount    Int       @default(0) // Track usage to detect abuse
+  lastUsedAt    DateTime? // Timestamp of last usage
+  invalidationAttempts Int @default(0) // Track invalidation attempts
+  lastContextHash String? // Hash of last context that used this session
+  
+  // CRITICAL: Enhanced replay prevention fields
+  sequenceNumber    Int       @default(0) // Sequential request tracking
+  lastNonce         String?   // Last used nonce for replay detection
+  lastRequestHash   String?   // Hash of last processed request
+  fingerprint       String?   // Serialized request fingerprint for validation
+  deviceFingerprint String?   // Device-specific fingerprint
+  ipAddress         String?   // IP address for geographic validation
+  userAgent         String?   // User agent for device validation
+  
+  // Security monitoring fields
+  replayAttemptsDetected Int @default(0) // Count of detected replay attempts
+  bindingViolations     Int @default(0) // Count of binding violations
+  nonceViolations       Int @default(0) // Count of nonce violations
+  hashViolations        Int @default(0) // Count of hash violations
+  timingAnomalies       Int @default(0) // Count of timing anomalies
+  
+  // Session integrity and encryption
+  integrityCheck    String?   // HMAC or signature for session integrity
+  encryptedContext  String?   // Encrypted context data
+  contextVersion    String    @default("1.0") // Schema version for migrations
+  
+  // Note: Sessions exist independently and are linked to admin verifications after successful verification
+
+  // Performance indexes for enhanced security
+  @@index([token])
+  @@index([discordUserId])
+  @@index([expiresAt])
+  @@index([used, expiresAt])
+  @@index([bindingHash])
+  @@index([sequenceNumber])
+  @@index([lastNonce])
+  @@index([replayAttemptsDetected])
+  @@index([bindingViolations])
+  @@index([integrityCheck])
+  @@map("verification_sessions")
+}
+
+// Comprehensive history tracking for all verification attempts
+// Enables security monitoring, debugging, and audit trails
+model VerificationHistory {
+  id            String   @id @default(cuid())
+  discordUserId String   // Discord user ID for correlation across attempts
+  success       Boolean  // Whether the verification attempt succeeded
+  timestamp     DateTime @default(now())
+  errorMessage  String?  // Optional error details for failed attempts
+  action        String?  // Action type (admin_verified, admin_rejected, auto_cleanup, etc.)
+
+  // Relationships
+  adminVerification AdminVerification? @relation(fields: [discordUserId], references: [discordUserId], onDelete: Cascade)
+
+  // Performance indexes
+  @@index([discordUserId])
+  @@index([success, timestamp])
+  @@index([timestamp])
+  @@index([action, timestamp])
+  @@map("verification_history")
+}
+
+// ============================================================================
+// Session Security and Replay Detection Models
+// ============================================================================
+
+// Session usage log for comprehensive tracking and replay detection
+model SessionUsageLog {
+  id            String   @id @default(cuid())
+  sessionId     String   // Links to verification session
+  discordUserId String   // Discord user ID for correlation
+  token         String   // Session token (partial for security)
+  operation     String   // Operation type: create, validate, invalidate, cleanup
+  timestamp     DateTime @default(now())
+  success       Boolean  // Whether the operation succeeded
+  errorMessage  String?  // Optional error details
+  contextHash   String?  // Hash of operation context
+  ipAddress     String?  // IP address (hashed for privacy)
+  userAgent     String?  // User agent (hashed for privacy)
+  guildId       String?  // Discord guild ID
+  bindingInfo   String?  // Serialized binding information (encrypted)
+
+  // Performance indexes
+  @@index([sessionId])
+  @@index([discordUserId])
+  @@index([timestamp])
+  @@index([operation, timestamp])
+  @@index([success, timestamp])
+  @@map("session_usage_logs")
+}
+
+// Session replay attempt tracking
+model SessionReplayAttempt {
+  id               String   @id @default(cuid())
+  sessionId        String   // Links to verification session
+  token            String   // Session token (partial for security)
+  discordUserId    String   // Discord user ID
+  attemptTimestamp DateTime @default(now())
+  contextHash      String   // Hash of attempt context
+  ipAddress        String?  // IP address (hashed for privacy)
+  userAgent        String?  // User agent (hashed for privacy)
+  detectionReason  String   // Reason: token_reuse, context_mismatch, timing_anomaly, geographic_anomaly
+  severity         String   // Severity: low, medium, high, critical
+  blocked          Boolean  @default(false) // Whether the attempt was blocked
+  metadata         String?  // Additional context data (JSON)
+
+  // Performance indexes
+  @@index([sessionId])
+  @@index([discordUserId])
+  @@index([attemptTimestamp])
+  @@index([detectionReason, attemptTimestamp])
+  @@index([severity])
+  @@index([blocked])
+  @@map("session_replay_attempts")
+}
+
+// Session security events for monitoring and alerting
+model SessionSecurityEvent {
+  id           String   @id @default(cuid())
+  sessionId    String   // Links to verification session
+  discordUserId String  // Discord user ID
+  eventType    String   // Event type: session_created, session_used, session_invalidated, etc.
+  timestamp    DateTime @default(now())
+  severity     String   // Severity: info, warning, error, critical
+  description  String   // Human-readable description
+  metadata     String?  // Additional event data (JSON)
+
+  // Performance indexes
+  @@index([sessionId])
+  @@index([discordUserId])
+  @@index([eventType, timestamp])
+  @@index([severity, timestamp])
+  @@map("session_security_events")
+}
+
+// Session audit trail for compliance and security analysis
+model SessionAuditTrail {
+  id            String   @id @default(cuid())
+  sessionId     String   // Links to verification session
+  discordUserId String   // Discord user ID
+  action        String   // Action performed
+  timestamp     DateTime @default(now())
+  actor         String   // Who performed the action (system, user, admin)
+  result        String   // Result: success, failure, partial
+  details       String?  // Detailed information about the action (JSON)
+  correlationId String?  // Correlation ID for tracking related actions
+
+  // Performance indexes
+  @@index([sessionId])
+  @@index([discordUserId])
+  @@index([timestamp])
+  @@index([action, timestamp])
+  @@index([correlationId])
+  @@map("session_audit_trails")
+}
+
+// Session performance metrics for optimization and monitoring
+model SessionPerformanceMetrics {
+  id                    String   @id @default(cuid())
+  sessionId             String   @unique // Links to verification session
+  createdAt             DateTime @default(now())
+  firstUsedAt           DateTime?
+  lastUsedAt            DateTime?
+  totalUsageCount       Int      @default(0)
+  averageUsageInterval  Float?   // Average time between uses in milliseconds
+  uniqueIpCount         Int      @default(0)
+  uniqueUserAgentCount  Int      @default(0)
+  replayAttemptsDetected Int     @default(0)
+  bindingViolations     Int      @default(0)
+  finalStatus           String   // Status: completed, expired, invalidated, compromised
+  cleanupTimestamp      DateTime?
+
+  // Performance indexes
+  @@index([sessionId])
+  @@index([finalStatus])
+  @@index([createdAt])
+  @@index([totalUsageCount])
+  @@map("session_performance_metrics")
+}
+
+// ============================================================================
+// Audit Logging Model
+// ============================================================================
+
+// Audit log for tracking administrative actions and security events
+model AuditLog {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  action    String   // Action performed (e.g., 'admin_verified', 'session_invalidated', 'rate_limit_exceeded')
+  details   Json?    // Additional details about the action (JSON format)
+  userId    String?  // Associated user ID (if applicable)
+  sessionId String?  // Associated session ID (if applicable)
+  ipAddress String?  // IP address (hashed for privacy)
+  userAgent String?  // User agent (hashed for privacy)
+  success   Boolean  @default(true) // Whether the action was successful
+  severity  String?  // Severity level: 'info', 'warning', 'error', 'critical'
+
+  // Performance indexes
+  @@index([timestamp])
+  @@index([action, timestamp])
+  @@index([userId])
+  @@index([sessionId])
+  @@index([severity])
+  @@map("audit_logs")
+}

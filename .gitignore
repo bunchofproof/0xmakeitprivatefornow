@@ -1,0 +1,34 @@
+# Environment files
+**/.env*
+
+# Dependencies
+**/node_modules
+
+# Logs and temporary files
+logs/
+*.log
+
+# Build artifacts
+dist/
+out/
+*.tsbuildinfo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Certificates and keys
+web/*.crt
+web/*.key
+web/*.pem
+web/*.backup
+
+# Database files
+*.sqlite
+*.db
+
+# Other sensitive/unnecessary files
+backend/log.txt
+bot/database/verification-sessions.json.bak
+bot/test-concurrency-db/test.json
+temp-dashboard/dashboardConfig.json

@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Security CSS - noscript styling */
+.noscript-message {
+  display: block;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: red;
+  font-size: 18px;
+  text-align: center;
+}
+
+body {
+  display: none;
+}
+
+noscript {
+  display: block !important;
+  position: fixed !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  color: red !important;
+  font-size: 18px !important;
+  text-align: center !important;
+}
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 0, 0, 0;
+    --background-end-rgb: 0, 0, 0;
+  }
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+}
+
+@layer components {
+  .qr-code-container {
+    @apply flex flex-col items-center justify-center min-h-screen p-4;
+  }
+
+  .status-message {
+    @apply mt-4 p-3 rounded-lg text-center font-medium;
+  }
+
+  .status-success {
+    @apply bg-green-100 text-green-800 border border-green-300;
+  }
+
+  .status-error {
+    @apply bg-red-100 text-red-800 border border-red-300;
+  }
+
+  .status-info {
+    @apply bg-blue-100 text-blue-800 border border-blue-300;
+  }
+
+  .loading-spinner {
+    @apply animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto;
+  }
+
+  .verification-card {
+    @apply bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 max-w-md mx-auto;
+  }
+
+  /* Enhanced QR Code Styling for Mobile */
+  .qr-code-wrapper {
+    @apply max-w-sm mx-auto;
+  }
+
+  /* Mobile-responsive QR code sizing */
+  @media (max-width: 640px) {
+    .qr-code-wrapper {
+      @apply max-w-xs px-2;
+    }
+
+    .verification-card {
+      @apply mx-4 max-w-none;
+    }
+  }
+
+  @media (min-width: 641px) and (max-width: 768px) {
+    .qr-code-wrapper {
+      @apply max-w-sm;
+    }
+  }
+
+  .button-primary {
+    @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors;
+  }
+
+  .button-secondary {
+    @apply bg-gray-200 hover:bg-gray-300 text-gray-800 font-medium py-2 px-4 rounded-lg transition-colors;
+  }
+}

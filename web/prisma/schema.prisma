@@ -1,0 +1,86 @@
+// Prisma schema for Discord Admin Verification System with ZKPassport
+// This schema extends the existing Discord bot OAuth foundation with zero-knowledge verification capabilities
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("POSTGRES_PRISMA_URL")
+  directUrl = env("POSTGRES_URL_NON_POOLING")
+}
+
+// Existing Discord OAuth user model - maintains compatibility with existing bot functionality
+model User {
+  id           String @id @default(uuid())
+  userId       String @unique
+  accessToken  String @unique
+  refreshToken String @unique
+
+  @@map("users")
+}
+
+// ============================================================================
+// ZKPassport Admin Verification System Models
+// ============================================================================
+
+// Core model storing verified admin users with their ZKPassport anonymous identifiers
+// SECURITY: Only stores anonymous identifiers, never personal information
+model AdminVerification {
+  id               String   @id @default(cuid())
+  discordUserId    String   @unique // Discord user ID for lookup and management
+  uniqueIdentifier String   @unique // ZKPassport anonymous identifier only - no personal data
+  lastVerified     DateTime @updatedAt // Automatically updated on verification changes
+  createdAt        DateTime @default(now())
+  isActive         Boolean  @default(true) // Allows for admin deactivation without deletion
+  expiryDate       DateTime? // Optional expiry for periodic re-verification requirements
+
+  // Relationships
+  history          VerificationHistory[]
+
+  // Performance indexes
+  @@index([discordUserId])
+  @@index([uniqueIdentifier])
+  @@index([isActive, expiryDate])
+  @@map("admin_verifications")
+}
+
+// Temporary sessions for ZKPassport verification process
+// Provides secure token-based verification flow with automatic cleanup
+model VerificationSession {
+  id            String   @id @default(cuid())
+  token         String   @unique // Secure random token for verification process
+  discordUserId String   // Links to Discord user initiating verification
+  expiresAt     DateTime // Automatic expiry for security
+  used          Boolean  @default(false) // Prevents token reuse
+  createdAt     DateTime @default(now())
+
+  // Note: Sessions exist independently and are linked to admin verifications after successful verification
+
+  // Performance indexes
+  @@index([token])
+  @@index([discordUserId])
+  @@index([expiresAt])
+  @@index([used, expiresAt])
+  @@map("verification_sessions")
+}
+
+// Comprehensive history tracking for all verification attempts
+// Enables security monitoring, debugging, and audit trails
+model VerificationHistory {
+  id            String   @id @default(cuid())
+  discordUserId String   // Discord user ID for correlation across attempts
+  success       Boolean  // Whether the verification attempt succeeded
+  timestamp     DateTime @default(now())
+  errorMessage  String?  // Optional error details for failed attempts
+
+  // Relationships
+  adminVerification AdminVerification? @relation(fields: [discordUserId], references: [discordUserId], onDelete: Cascade)
+
+  // Performance indexes
+  @@index([discordUserId])
+  @@index([success, timestamp])
+  @@index([timestamp])
+  @@map("verification_history")
+}

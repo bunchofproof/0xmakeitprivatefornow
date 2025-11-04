@@ -1,0 +1,439 @@
+// Session Security Manager Test Suite
+// Tests atomic session operations, replay detection, and security hardening
+
+import { sessionSecurityManager, SessionBinding } from '../utils/sessionSecurityManager';
+import { databaseDriver } from '../utils/databaseDrivers';
+import { logger } from '../utils/logger';
+
+// Test session security manager
+describe('SessionSecurityManager', () => {
+  beforeEach(async () => {
+    // Clean up any existing test data
+    try {
+      await databaseDriver.instance.executeTransaction(async (tx) => {
+        const sessions = await tx.read('verification-sessions.json');
+        const securityEvents = await tx.read('session-security-events.json');
+        const replayAttempts = await tx.read('session-replay-attempts.json');
+        
+        // Remove test sessions and events
+        const filteredSessions = sessions.filter((s: any) => !s.discordUserId.startsWith('test_'));
+        const filteredEvents = securityEvents.filter((e: any) => !e.discordUserId.startsWith('test_'));
+        const filteredAttempts = replayAttempts.filter((a: any) => !a.discordUserId.startsWith('test_'));
+        
+        await tx.write('verification-sessions.json', filteredSessions);
+        await tx.write('session-security-events.json', filteredEvents);
+        await tx.write('session-replay-attempts.json', filteredAttempts);
+      });
+    } catch (error) {
+      console.warn('Failed to clean up test data:', error);
+    }
+  });
+
+  describe('Session Creation', () => {
+    test('should create secure session with binding', async () => {
+      const binding: SessionBinding = {
+        ipAddress: '192.168.1.100',
+        userAgent: 'Discord Bot Test/1.0',
+        guildId: 'test_guild_123',
+        verificationType: 'personhood'
+      };
+
+      const result = await sessionSecurityManager.createSecureSession(
+        'test_user_123',
+        binding
+      );
+
+      expect(result).toHaveProperty('sessionId');
+      expect(result).toHaveProperty('token');
+      expect(result).toHaveProperty('expiresAt');
+      expect(result).toHaveProperty('bindingHash');
+      expect(result.bindingHash).toBeDefined();
+      expect(result.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    });
+
+    test('should create session without binding', async () => {
+      const result = await sessionSecurityManager.createSecureSession('test_user_456');
+
+      expect(result).toHaveProperty('sessionId');
+      expect(result).toHaveProperty('token');
+      expect(result.bindingHash).toBeUndefined();
+    });
+  });
+
+  describe('Atomic Session Invalidation', () => {
+    test('should atomically validate and invalidate session', async () => {
+      // Create a test session
+      const binding: SessionBinding = {
+        ipAddress: '192.168.1.100',
+        userAgent: 'Discord Bot Test/1.0',
+        verificationType: 'personhood'
+      };
+
+      const { sessionId, token } = await sessionSecurityManager.createSecureSession(
+        'test_user_789',
+        binding
+      );
+
+      // Validate and invalidate the session
+      const validationResult = await sessionSecurityManager.validateAndInvalidateSession(
+        token,
+        binding
+      );
+
+      expect(validationResult).toHaveProperty('valid', true);
+      expect(validationResult).toHaveProperty('sessionId', sessionId);
+      expect(validationResult).toHaveProperty('discordUserId', 'test_user_789');
+
+      // Try to validate the same token again - should fail
+      const secondValidation = await sessionSecurityManager.validateAndInvalidateSession(
+        token,
+        binding
+      );
+
+      expect(secondValidation).toHaveProperty('valid', false);
+      expect(secondValidation).toHaveProperty('error', 'Session already used');
+    });
+
+    test('should detect binding violations', async () => {
+      // Create a session with specific binding
+      const binding1: SessionBinding = {
+        ipAddress: '192.168.1.100',
+        verificationType: 'personhood'
+      };
+
+      const { token } = await sessionSecurityManager.createSecureSession(
+        'test_user_binding',
+        binding1
+      );
+
+      // Try to use the session with different binding
+      const binding2: SessionBinding = {
+        ipAddress: '192.168.1.200', // Different IP
+        verificationType: 'personhood'
+      };
+
+      const validationResult = await sessionSecurityManager.validateAndInvalidateSession(
+        token,
+        binding2
+      );
+
+      expect(validationResult).toHaveProperty('valid', false);
+      expect(validationResult).toHaveProperty('error', 'Session binding violation');
+    });
+  });
+
+  describe('Session Replay Detection', () => {
+    test('should detect timing-based replay attempts', async () => {
+      const binding: SessionBinding = {
+        ipAddress: '192.168.1.100',
+        verificationType: 'personhood'
+      };
+
+      const { token } = await sessionSecurityManager.createSecureSession(
+        'test_user_replay',
+        binding
+      );
+
+      // First use should succeed
+      const firstUse = await sessionSecurityManager.validateAndInvalidateSession(
+        token,
+        binding
+      );
+      expect(firstUse).toHaveProperty('valid', true);
+
+      // Immediate reuse should be detected
+      const rapidReuse = await sessionSecurityManager.validateAndInvalidateSession(
+        token,
+        binding
+      );
+      expect(rapidReuse).toHaveProperty('valid', false);
+      expect(rapidReuse.error).toMatch(/already used|timing anomaly/i);
+    });
+
+    test('should track replay attempt context', async () => {
+      const binding: SessionBinding = {
+        ipAddress: '192.168.1.100',
+        userAgent: 'Replay Test Agent',
+        guildId: 'replay_test_guild'
+      };
+
+      const { token } = await sessionSecurityManager.createSecureSession(
+        'test_user_context',
+        binding
+      );
+
+      // Use session successfully
+      await sessionSecurityManager.validateAndInvalidateSession(token, binding);
+
+      // Check security statistics for replay tracking
+      const stats = await sessionSecurityManager.getSessionSecurityStats();
+      expect(stats).toHaveProperty('totalSessions');
+      expect(stats).toHaveProperty('activeSessions');
+      expect(stats).toHaveProperty('securityEvents');
+    });
+  });
+
+  describe('Security Cleanup', () => {
+    test('should perform security cleanup', async () => {
+      // Create some test sessions
+      await sessionSecurityManager.createSecureSession('test_cleanup_1');
+      await sessionSecurityManager.createSecureSession('test_cleanup_2');
+      await sessionSecurityManager.createSecureSession('test_cleanup_3');
+
+      // Perform cleanup
+      const cleanupResult = await sessionSecurityManager.performSecurityCleanup();
+
+      expect(cleanupResult).toHaveProperty('expiredSessions');
+      expect(cleanupResult).toHaveProperty('compromisedSessions');
+      expect(cleanupResult).toHaveProperty('replayAttempts');
+      expect(cleanupResult).toHaveProperty('errors');
+      expect(Array.isArray(cleanupResult.errors)).toBe(true);
+    });
+  });
+
+  describe('Session Security Statistics', () => {
+    test('should provide security statistics', async () => {
+      // Create some test sessions
+      await sessionSecurityManager.createSecureSession('test_stats_1');
+      await sessionSecurityManager.createSecureSession('test_stats_2');
+
+      const stats = await sessionSecurityManager.getSessionSecurityStats();
+
+      expect(stats).toHaveProperty('totalSessions');
+      expect(stats).toHaveProperty('activeSessions');
+      expect(stats).toHaveProperty('expiredSessions');
+      expect(stats).toHaveProperty('compromisedSessions');
+      expect(stats).toHaveProperty('replayAttempts');
+      expect(stats).toHaveProperty('bindingViolations');
+      expect(stats).toHaveProperty('securityEvents');
+      
+      // Basic sanity checks
+      expect(stats.totalSessions).toBeGreaterThanOrEqual(0);
+      expect(stats.activeSessions).toBeGreaterThanOrEqual(0);
+      expect(stats.activeSessions).toBeLessThanOrEqual(stats.totalSessions);
+    });
+  });
+
+  describe('Error Handling', () => {
+    test('should handle invalid token gracefully', async () => {
+      const binding: SessionBinding = {
+        ipAddress: '192.168.1.100'
+      };
+
+      const result = await sessionSecurityManager.validateAndInvalidateSession(
+        'invalid_token_12345',
+        binding
+      );
+
+      expect(result).toHaveProperty('valid', false);
+      expect(result.error).toBeDefined();
+    });
+
+    test('should handle expired session', async () => {
+      // Create a session and immediately set it as expired in the database
+      await databaseDriver.instance.executeTransaction(async (tx) => {
+        const sessions = await tx.read('verification-sessions.json');
+        const expiredSession = {
+          id: 'expired_session_123',
+          token: 'expired_token_456',
+          discordUserId: 'test_expired',
+          expiresAt: new Date(Date.now() - 1000), // Expired 1 second ago
+          used: false,
+          createdAt: new Date(Date.now() - 60000) // Created 1 minute ago
+        };
+        sessions.push(expiredSession);
+        await tx.write('verification-sessions.json', sessions);
+      });
+
+      const binding: SessionBinding = {
+        ipAddress: '192.168.1.100'
+      };
+
+      const result = await sessionSecurityManager.validateAndInvalidateSession(
+        'expired_token_456',
+        binding
+      );
+
+      expect(result).toHaveProperty('valid', false);
+      expect(result.error).toBe('Session expired');
+    });
+  });
+});
+
+// Test race condition scenarios
+describe('Session Race Condition Tests', () => {
+  test('should prevent race condition in concurrent session validation', async () => {
+    const binding: SessionBinding = {
+      ipAddress: '192.168.1.100',
+      verificationType: 'race_test'
+    };
+
+    const { token } = await sessionSecurityManager.createSecureSession(
+      'test_race_condition',
+      binding
+    );
+
+    // Simulate multiple concurrent validation attempts
+    const validationPromises = Array(5).fill(null).map(() => 
+      sessionSecurityManager.validateAndInvalidateSession(token, binding)
+    );
+
+    const results = await Promise.all(validationPromises);
+
+    // Exactly one should succeed, others should fail
+    const successfulValidations = results.filter(r => r.valid);
+    const failedValidations = results.filter(r => !r.valid);
+
+    expect(successfulValidations.length).toBe(1);
+    expect(failedValidations.length).toBe(4);
+    
+    // All failed validations should indicate session already used
+    failedValidations.forEach(result => {
+      expect(result.error).toMatch(/already used|session invalid/i);
+    });
+  });
+
+  test('should handle concurrent session creation', async () => {
+    const userId = 'test_concurrent_user';
+    
+    // Create multiple sessions for the same user (should invalidate previous ones)
+    const createPromises = Array(3).fill(null).map(() =>
+      sessionSecurityManager.createSecureSession(userId)
+    );
+
+    const results = await Promise.all(createPromises);
+
+    // Should all succeed
+    expect(results.length).toBe(3);
+    results.forEach(result => {
+      expect(result).toHaveProperty('sessionId');
+      expect(result).toHaveProperty('token');
+    });
+
+    // The later sessions should have invalidated the earlier ones
+    const stats = await sessionSecurityManager.getSessionSecurityStats();
+    expect(stats.activeSessions).toBe(1); // Only the latest should be active
+  });
+});
+
+// Performance test
+describe('Session Security Performance', () => {
+  test('should handle high-frequency operations efficiently', async () => {
+    const startTime = Date.now();
+    const operations = 100;
+
+    // Create multiple sessions
+    const createPromises = Array(operations).fill(null).map((_, i) =>
+      sessionSecurityManager.createSecureSession(`perf_test_${i}`)
+    );
+
+    await Promise.all(createPromises);
+
+    const createTime = Date.now() - startTime;
+
+    // Validate all sessions (should fail due to binding mismatch)
+    const validationPromises = Array(operations).fill(null).map((_, i) => {
+      const binding: SessionBinding = {
+        ipAddress: `192.168.1.${i}`,
+        verificationType: 'performance_test'
+      };
+      return sessionSecurityManager.createSecureSession(`perf_test_${i}`, binding)
+        .then(session => 
+          sessionSecurityManager.validateAndInvalidateSession(session.token, binding)
+        );
+    });
+
+    await Promise.all(validationPromises);
+
+    const totalTime = Date.now() - startTime;
+
+    // Performance should be reasonable (less than 10 seconds for 200 operations)
+    expect(totalTime).toBeLessThan(10000);
+    console.log(`Performance test: ${operations} sessions created and validated in ${totalTime}ms`);
+  });
+});
+
+// Export test runner
+export async function runSessionSecurityTests(): Promise<{
+  passed: number;
+  failed: number;
+  errors: string[];
+  performance: {
+    averageCreateTime: number;
+    averageValidationTime: number;
+  };
+}> {
+  let passed = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  
+  console.log('🧪 Running Session Security Manager Tests...');
+
+  try {
+    // Test basic functionality
+    console.log('Testing session creation...');
+    const { sessionId, token } = await sessionSecurityManager.createSecureSession(
+      'test_validation',
+      { ipAddress: '127.0.0.1', verificationType: 'test' }
+    );
+    passed++;
+
+    console.log('Testing atomic validation...');
+    const validation = await sessionSecurityManager.validateAndInvalidateSession(
+      token,
+      { ipAddress: '127.0.0.1', verificationType: 'test' }
+    );
+    
+    if (validation.valid) {
+      passed++;
+    } else {
+      failed++;
+      errors.push(`Validation failed: ${validation.error}`);
+    }
+
+    console.log('Testing replay detection...');
+    const replayTest = await sessionSecurityManager.validateAndInvalidateSession(
+      token,
+      { ipAddress: '127.0.0.1', verificationType: 'test' }
+    );
+    
+    if (!replayTest.valid && replayTest.error) {
+      passed++;
+    } else {
+      failed++;
+      errors.push('Replay detection failed');
+    }
+
+    console.log('Testing security cleanup...');
+    const cleanup = await sessionSecurityManager.performSecurityCleanup();
+    passed++;
+
+    console.log('Testing statistics...');
+    const stats = await sessionSecurityManager.getSessionSecurityStats();
+    if (stats.totalSessions >= 0) {
+      passed++;
+    } else {
+      failed++;
+      errors.push('Statistics retrieval failed');
+    }
+
+  } catch (error) {
+    failed++;
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+
+  console.log(`📊 Test Results: ${passed} passed, ${failed} failed`);
+  if (errors.length > 0) {
+    console.log('❌ Errors:', errors);
+  }
+
+  return {
+    passed,
+    failed,
+    errors,
+    performance: {
+      averageCreateTime: 0, // Would calculate from performance tests
+      averageValidationTime: 0
+    }
+  };
+}

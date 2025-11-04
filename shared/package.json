@@ -1,0 +1,27 @@
+{
+  "name": "zk-discord-verifier-shared",
+  "version": "1.0.0",
+  "description": "Shared types and utilities for ZKPassport Discord verification system",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "author": "ZKPassport Team",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@zkpassport/sdk": "^0.11.0",
+    "zod": "^3.22.4",
+    "rate-limiter-flexible": "^5.0.3",
+    "ioredis": "^5.3.2"
+  }
+}
