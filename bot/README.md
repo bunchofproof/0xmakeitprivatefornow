@@ -274,26 +274,3 @@ The bot provides structured logging with configurable levels:
 - `error`: Error conditions
 
 Set `LOG_LEVEL` in environment variables to control verbosity.
-
-## 🤝 Contributing
-
-1. Follow TypeScript strict mode guidelines
-2. Add proper error handling and validation
-3. Update tests when adding new functionality
-4. Follow existing code patterns and structure
-5. Ensure all security measures are maintained
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🆘 Support
-
-For support and questions:
-1. Check the troubleshooting section above
-2. Review the logs for error details
-3. Contact the development team
-
----
-
-**Note**: This bot handles sensitive verification data. Ensure all security measures are properly configured before deploying to production environments.
